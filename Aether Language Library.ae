@@ -1,0 +1,955 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# AETHER LANGUAGE LIBRARY v1.0 — the complete Aether language in one file
+# Written entirely in the Aether programming language · self-hosting · offline
+# Run inside Kernel Aether v11 FABRIC / KAE-SYSTEM Aether.html via AetherLang.run()
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# §1 LANGUAGE MAP — what is in this file
+#   §1 MAP          this section: how to use, what exists
+#   §2 META-CORE    Aether interpreter written in Aether (self-hosting proof)
+#                   metaTokenize · metaParseExpr · metaEval · metaRun
+#   §3 STDLIB       standard library written in Aether: gcd, lcm, isPrime,
+#                   fibIter, factIter, padLeft, repeatStr, unique, flatten,
+#                   chunk, zip, merge, capitalize, countOcc, reverseStr
+#   §4 WASM         self-hosting compiler: Aether -> WebAssembly binary,
+#                   base64, stored to HyperFS (wasm:kernel) — compilable by
+#                   any WASM runtime (browser, Node, Wasmtime, Wasmer)
+#   §5 ENGINES      bridge to host engines: engines() list, engine() run
+#                   (math.exact · logic.exact · axiom.kb · rag.vector ·
+#                    wiki.instant · dag.graph · cag.cache)
+#   §6 MODULES      package manager on HyperFS: publishModule / importModule /
+#                   moduleList — plus importUrl registry for web packages
+#                   (BrowserAgent bridge fetches the URL in the host app)
+#   §7 DOCGEN       /// comment lines -> text + HTML documentation
+#   §8 EXAMPLES     documented runnable examples for every section
+#   §9 TESTS        full self-test suite (~40 checks) — all must pass
+#   §10 REPORT      final summary
+#
+# HOST BUILTINS (provided by the AetherLang runtime, usable everywhere):
+#   core:      print len str int float type abs min max round floor ceil
+#   math:      sqrt cbrt pow random randf sin cos tan asin acos atan atan2
+#              log log2 log10 exp sign PI E phi
+#   lists:     range append push pop shift insert remove sort sortBy reverse
+#              join sum product mean first last take skip flatten chunk zip
+#              enumerate map filter reduce
+#   strings:   split upper lower replace trim includes indexOf substr
+#              startsWith endsWith
+#   dicts:     keys values get put json parse
+#   time:      sleep now
+#   engines:   engines engine classify generate embed visualize
+#   memory:    umem_get umem_put umem_keys umem_clear
+#   quantum:   tensor hyper entangle qpar qpanic qawait reversible spatial
+#              dim symbolic evolve bio measure qgate
+#   test:      assert
+#
+# KAE BRIDGE (host services, kae.<name>):
+#   kae.status()            KÆ status {version, aetherLang, fs}
+#   kae.models()            registered model names
+#   kae.agents()            registered agents
+#   kae.write(key, data)    HyperFS write -> hash
+#   kae.read(key)           HyperFS read
+#   kae.list()              HyperFS keys
+#   kae.rag(q, n)           RAG hits [{domain, score, text}]
+#   kae.factor(n)           exact factorization
+#   kae.integrate(e, v)     symbolic integration
+#   kae.differentiate(e, v) symbolic differentiation
+#   kae.fabric_rack()       fabric rack stats
+#   kae.fabric_shot(t)      fabric dimensional shot
+#   kae.photon()            photon stats
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── §1 BOOT ──────────────────────────────────────────────────────────────────
+print "══════════════════════════════════════════"
+print "  AETHER LANGUAGE LIBRARY  ·  v1.0"
+print "  self-hosting · single-file · offline"
+print "══════════════════════════════════════════"
+
+# ── §2 META-CORE — an Aether interpreter written in Aether ─────────────────
+# The meta-interpreter parses and evaluates an Aether subset (functions with
+# expression bodies, arithmetic, comparisons, ternary, recursion, calls).
+# It proves self-hosting: the language can run its own programs without the
+# host shell. metaRun(src, expr) = evaluate expr with functions from src.
+
+# lexer — tokens: ["num",v] ["id",n] ["op",op] ["lp"] ["rp"] ["comma"] ["q"] ["colon"]
+fn metaTokenize(expr)
+  mut toks = []
+  let i = 0
+  let n = len(expr)
+  while i < n
+    let c = substr(expr, i, 1)
+    let two = substr(expr, i, 2)
+    if c == " " || c == "\n"
+      i += 1
+    else if indexOf("0123456789", c) >= 0
+      let start = i
+      while i < n && indexOf("0123456789", substr(expr, i, 1)) >= 0
+        i += 1
+      push(toks, ["num", int(substr(expr, start, i - start))])
+    else if indexOf("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_", c) >= 0
+      let start = i
+      while i < n && indexOf("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789", substr(expr, i, 1)) >= 0
+        i += 1
+      push(toks, ["id", substr(expr, start, i - start)])
+    else if two == "<=" || two == ">=" || two == "==" || two == "!="
+      push(toks, ["op", two])
+      i += 2
+    else if c == "<" || c == ">" || c == "!"
+      push(toks, ["op", c])
+      i += 1
+    else if indexOf("+-*/%", c) >= 0
+      push(toks, ["op", c])
+      i += 1
+    else if c == "("
+      push(toks, ["lp", "("])
+      i += 1
+    else if c == ")"
+      push(toks, ["rp", ")"])
+      i += 1
+    else if c == "["
+      push(toks, ["lb", "["])
+      i += 1
+    else if c == "]"
+      push(toks, ["rb", "]"])
+      i += 1
+    else if c == ","
+      push(toks, ["comma", ","])
+      i += 1
+    else if c == "?"
+      push(toks, ["q", "?"])
+      i += 1
+    else if c == ":"
+      push(toks, ["colon", ":"])
+      i += 1
+    else
+      i += 1
+  return toks
+
+# parser — recursive descent, returns [ast, pos]
+fn metaParsePrimary(toks, pos)
+  let t = get(toks, pos)
+  let type = get(t, 0)
+  if type == "num"
+    return [["num", get(t, 1)], pos + 1]
+  if type == "id"
+    let name = get(t, 1)
+    if pos + 1 < len(toks) && get(get(toks, pos + 1), 0) == "lp"
+      mut args = []
+      mut p = pos + 2
+      while get(get(toks, p), 0) != "rp"
+        let a = metaParseExpr(toks, p)
+        push(args, get(a, 0))
+        p = get(a, 1)
+        if p < len(toks) && get(get(toks, p), 0) == "comma"
+          p += 1
+      return [["call", name, args], p + 1]
+    return [["id", name], pos + 1]
+  if type == "lp"
+    let inner = metaParseExpr(toks, pos + 1)
+    return [get(inner, 0), get(inner, 1) + 1]
+  if type == "lb"
+    mut items = []
+    mut p = pos + 1
+    while get(get(toks, p), 0) != "rb"
+      let a = metaParseExpr(toks, p)
+      push(items, get(a, 0))
+      p = get(a, 1)
+      if p < len(toks) && get(get(toks, p), 0) == "comma"
+        p += 1
+    return [["list", items], p + 1]
+  if type == "op" && get(t, 1) == "-"
+    let u = metaParsePrimary(toks, pos + 1)
+    return [["neg", get(u, 0)], get(u, 1)]
+  return [["num", 0], pos + 1]
+
+fn isMulOp(toks, p)
+  if p >= len(toks)
+    return false
+  let t = get(toks, p)
+  if get(t, 0) != "op"
+    return false
+  let op = get(t, 1)
+  return op == "*" || op == "/" || op == "%"
+
+fn isAddOp(toks, p)
+  if p >= len(toks)
+    return false
+  let t = get(toks, p)
+  if get(t, 0) != "op"
+    return false
+  let op = get(t, 1)
+  return op == "+" || op == "-"
+
+fn isCmpOp(toks, p)
+  if p >= len(toks)
+    return false
+  let t = get(toks, p)
+  if get(t, 0) != "op"
+    return false
+  let op = get(t, 1)
+  return op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!="
+
+fn metaParseMul(toks, pos)
+  let l = metaParsePrimary(toks, pos)
+  mut ast = get(l, 0)
+  mut p = get(l, 1)
+  while isMulOp(toks, p)
+    let op = get(get(toks, p), 1)
+    let r = metaParsePrimary(toks, p + 1)
+    ast = ["bin", op, ast, get(r, 0)]
+    p = get(r, 1)
+  return [ast, p]
+
+fn metaParseAdd(toks, pos)
+  let l = metaParseMul(toks, pos)
+  mut ast = get(l, 0)
+  mut p = get(l, 1)
+  while isAddOp(toks, p)
+    let op = get(get(toks, p), 1)
+    let r = metaParseMul(toks, p + 1)
+    ast = ["bin", op, ast, get(r, 0)]
+    p = get(r, 1)
+  return [ast, p]
+
+fn metaParseCmp(toks, pos)
+  let l = metaParseAdd(toks, pos)
+  mut ast = get(l, 0)
+  mut p = get(l, 1)
+  while isCmpOp(toks, p)
+    let op = get(get(toks, p), 1)
+    let r = metaParseAdd(toks, p + 1)
+    ast = ["bin", op, ast, get(r, 0)]
+    p = get(r, 1)
+  return [ast, p]
+
+fn metaParseExpr(toks, pos)
+  let left = metaParseCmp(toks, pos)
+  let p = get(left, 1)
+  if p < len(toks) && get(get(toks, p), 0) == "q"
+    let thenR = metaParseExpr(toks, p + 1)
+    let p2 = get(thenR, 1)
+    let elseR = metaParseExpr(toks, p2 + 1)
+    return [["tern", get(left, 0), get(thenR, 0), get(elseR, 0)], get(elseR, 1)]
+  return left
+
+# source parser — lines "fn name(p1, p2) -> expr" -> [name, params, bodyAst]
+fn metaParseSource(src)
+  mut funcs = []
+  let lines = split(src, "\n")
+  for line in lines
+    if startsWith(line, "fn ")
+      let lp = indexOf(line, "(")
+      let rp = indexOf(line, ")")
+      let arrow = indexOf(line, "->")
+      let name = trim(substr(line, 3, lp - 3))
+      let paramsPart = trim(substr(line, lp + 1, rp - lp - 1))
+      let exprPart = trim(substr(line, arrow + 2, len(line) - arrow - 2))
+      mut params = []
+      if len(paramsPart) > 0
+        let ps = split(paramsPart, ",")
+        for p in ps
+          push(params, trim(p))
+      let toks = metaTokenize(exprPart)
+      let parsed = metaParseExpr(toks, 0)
+      push(funcs, [name, params, get(parsed, 0)])
+  return funcs
+
+# environment — list of [name, value]; lookup scans last-first
+fn metaEnv()
+  return []
+
+fn metaDefine(env, name, value)
+  push(env, [name, value])
+  return value
+
+fn metaLookup(env, name)
+  let i = len(env) - 1
+  while i >= 0
+    let pair = get(env, i)
+    if get(pair, 0) == name
+      return get(pair, 1)
+    i -= 1
+  return 0
+
+# evaluator — AST -> value
+fn metaEval(ast, env)
+  let t = get(ast, 0)
+  if t == "num"
+    return get(ast, 1)
+  if t == "id"
+    return metaLookup(env, get(ast, 1))
+  if t == "neg"
+    return 0 - metaEval(get(ast, 1), env)
+  if t == "list"
+    mut out = []
+    let i = 0
+    while i < len(get(ast, 1))
+      push(out, metaEval(get(get(ast, 1), i), env))
+      i += 1
+    return out
+  if t == "bin"
+    let l = metaEval(get(ast, 2), env)
+    let r = metaEval(get(ast, 3), env)
+    return metaApply(get(ast, 1), l, r)
+  if t == "tern"
+    if metaEval(get(ast, 1), env) != 0
+      return metaEval(get(ast, 2), env)
+    return metaEval(get(ast, 3), env)
+  if t == "call"
+    mut args = []
+    let i = 0
+    while i < len(get(ast, 2))
+      push(args, metaEval(get(get(ast, 2), i), env))
+      i += 1
+    return metaCall(get(ast, 1), args, env)
+  return 0
+
+fn metaApply(op, l, r)
+  if op == "+"
+    return l + r
+  if op == "-"
+    return l - r
+  if op == "*"
+    return l * r
+  if op == "/"
+    return int(l / r)
+  if op == "%"
+    return l % r
+  if op == "<"
+    return l < r ? 1 : 0
+  if op == "<="
+    return l <= r ? 1 : 0
+  if op == ">"
+    return l > r ? 1 : 0
+  if op == ">="
+    return l >= r ? 1 : 0
+  if op == "=="
+    return l == r ? 1 : 0
+  if op == "!="
+    return l != r ? 1 : 0
+  return 0
+
+# function call — user fn (meta-fn) or host builtin dispatch registry
+fn metaCall(name, args, env)
+  let fnv = metaLookup(env, name)
+  if len(fnv) == 4 && get(fnv, 0) == "meta-fn"
+    let child = []
+    let i = 0
+    while i < len(env)
+      push(child, get(env, i))
+      i += 1
+    let k = 0
+    while k < len(get(fnv, 1))
+      push(child, [get(get(fnv, 1), k), get(args, k)])
+      k += 1
+    return metaEval(get(fnv, 2), child)
+  if name == "len"
+    return len(get(args, 0))
+  if name == "str"
+    return str(get(args, 0))
+  if name == "int"
+    return int(get(args, 0))
+  if name == "abs"
+    return abs(get(args, 0))
+  if name == "min"
+    return min(get(args, 0), get(args, 1))
+  if name == "max"
+    return max(get(args, 0), get(args, 1))
+  if name == "sum"
+    return sum(get(args, 0))
+  if name == "mean"
+    return mean(get(args, 0))
+  if name == "sqrt"
+    return sqrt(get(args, 0))
+  if name == "pow"
+    return pow(get(args, 0), get(args, 1))
+  if name == "push"
+    return push(get(args, 0), get(args, 1))
+  if name == "get"
+    return get(get(args, 0), get(args, 1))
+  if name == "print"
+    print(get(args, 0))
+    return 0
+  return 0
+
+# metaRun — compile source + evaluate expression (the self-hosting entry)
+fn metaRun(src, expr)
+  let funcs = metaParseSource(src)
+  let env = metaEnv()
+  let i = 0
+  while i < len(funcs)
+    let f = get(funcs, i)
+    metaDefine(env, get(f, 0), ["meta-fn", get(f, 1), get(f, 2), get(f, 0)])
+    i += 1
+  let toks = metaTokenize(expr)
+  let parsed = metaParseExpr(toks, 0)
+  return metaEval(get(parsed, 0), env)
+
+# ── §3 STDLIB — standard library written in Aether ──────────────────────────
+# number theory
+fn libGcd(a, b)
+  mut x = abs(a)
+  mut y = abs(b)
+  while y != 0
+    let r = x % y
+    x = y
+    y = r
+  return x
+
+fn libLcm(a, b)
+  if a == 0 || b == 0
+    return 0
+  return int(abs(a * b) / libGcd(a, b))
+
+fn libIsPrime(n)
+  if n < 2
+    return 0
+  let i = 2
+  while i * i <= n
+    if n % i == 0
+      return 0
+    i += 1
+  return 1
+
+fn libFact(n)
+  mut r = 1
+  let i = 2
+  while i <= n
+    r *= i
+    i += 1
+  return r
+
+fn libFib(n)
+  if n < 2
+    return n
+  mut a = 0
+  mut b = 1
+  let i = 2
+  while i <= n
+    let t = a + b
+    a = b
+    b = t
+    i += 1
+  return b
+
+# strings
+fn libPadLeft(s, n, ch)
+  mut out = s
+  while len(out) < n
+    out = ch + out
+  return out
+
+fn libPadRight(s, n, ch)
+  mut out = s
+  while len(out) < n
+    out = out + ch
+  return out
+
+fn libRepeatStr(s, n)
+  mut out = ""
+  let i = 0
+  while i < n
+    out = out + s
+    i += 1
+  return out
+
+fn libCountOcc(s, sub)
+  if len(sub) == 0
+    return 0
+  mut count = 0
+  let i = 0
+  while i <= len(s) - len(sub)
+    if substr(s, i, len(sub)) == sub
+      count += 1
+      i += len(sub)
+    else
+      i += 1
+  return count
+
+fn libReverseStr(s)
+  mut out = ""
+  let i = len(s) - 1
+  while i >= 0
+    out = out + substr(s, i, 1)
+    i -= 1
+  return out
+
+fn libCapitalize(s)
+  if len(s) == 0
+    return s
+  return upper(substr(s, 0, 1)) + lower(substr(s, 1, len(s) - 1))
+
+# lists
+fn libUnique(l)
+  mut out = []
+  let i = 0
+  while i < len(l)
+    let v = get(l, i)
+    if indexOf(out, v) < 0
+      push(out, v)
+    i += 1
+  return out
+
+fn libFlatten(l)
+  mut out = []
+  let i = 0
+  while i < len(l)
+    let v = get(l, i)
+    if type(v) == "list"
+      let j = 0
+      while j < len(v)
+        push(out, get(v, j))
+        j += 1
+    else
+      push(out, v)
+    i += 1
+  return out
+
+fn libChunk(l, size)
+  mut out = []
+  let i = 0
+  while i < len(l)
+    mut part = []
+    let j = 0
+    while j < size && i + j < len(l)
+      push(part, get(l, i + j))
+      j += 1
+    push(out, part)
+    i += size
+  return out
+
+fn libZip(a, b)
+  mut out = []
+  let n = min(len(a), len(b))
+  let i = 0
+  while i < n
+    push(out, [get(a, i), get(b, i)])
+    i += 1
+  return out
+
+fn libMerge(d1, d2)
+  let out = d1
+  let ks = keys(d2)
+  let i = 0
+  while i < len(ks)
+    put(out, get(ks, i), get(d2, get(ks, i)))
+    i += 1
+  return out
+
+fn libConcat(a, b)
+  mut out = []
+  let i = 0
+  while i < len(a)
+    push(out, get(a, i))
+    i += 1
+  let j = 0
+  while j < len(b)
+    push(out, get(b, j))
+    j += 1
+  return out
+
+fn libSum(l)
+  mut s = 0
+  let i = 0
+  while i < len(l)
+    s += get(l, i)
+    i += 1
+  return s
+
+# ── §4 WASM — self-hosting Aether->WebAssembly compiler (embedded) ─────────
+fn uleb(n)
+  mut bytes = []
+  mut v = n
+  mut done = false
+  while done == false
+    let b = v % 128
+    v = int(v / 128)
+    if v > 0
+      push(bytes, b + 128)
+    else
+      push(bytes, b)
+      done = true
+  return bytes
+
+fn sleb(n)
+  mut bytes = []
+  mut v = n
+  mut done = false
+  while done == false
+    mut b = v % 128
+    v = int(v / 128)
+    if b < 0
+      b += 128
+      v -= 1
+    if (v == 0 && b < 64) || (v == -1 && b >= 64)
+      push(bytes, b)
+      done = true
+    else
+      push(bytes, b + 128)
+  return bytes
+
+fn asciiOf(c)
+  let T = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+  let i = indexOf(T, c)
+  if i >= 0
+    return 32 + i
+  return 0
+
+fn nameBytes(s)
+  mut out = uleb(len(s))
+  let i = 0
+  while i < len(s)
+    push(out, asciiOf(substr(s, i, 1)))
+    i += 1
+  return out
+
+fn concat(a, b)
+  mut out = []
+  let i = 0
+  while i < len(a)
+    push(out, get(a, i))
+    i += 1
+  let j = 0
+  while j < len(b)
+    push(out, get(b, j))
+    j += 1
+  return out
+
+fn emit(ast, locals, fnMap)
+  let t = get(ast, 0)
+  if t == "num"
+    return concat([65], sleb(get(ast, 1)))
+  if t == "id"
+    return concat([32], uleb(get(locals, get(ast, 1))))
+  if t == "neg"
+    return concat([65, 0], concat(emit(get(ast, 1), locals, fnMap), [107]))
+  if t == "bin"
+    let op = get(ast, 1)
+    mut opcode = 106
+    if op == "-"
+      opcode = 107
+    else if op == "*"
+      opcode = 108
+    else if op == "/"
+      opcode = 109
+    else if op == "%"
+      opcode = 111
+    else if op == "<"
+      opcode = 72
+    else if op == "<="
+      opcode = 76
+    else if op == ">"
+      opcode = 74
+    else if op == ">="
+      opcode = 78
+    else if op == "=="
+      opcode = 70
+    else if op == "!="
+      opcode = 71
+    return concat(emit(get(ast, 2), locals, fnMap), concat(emit(get(ast, 3), locals, fnMap), [opcode]))
+  if t == "tern"
+    return concat(emit(get(ast, 1), locals, fnMap), concat([4, 127], concat(emit(get(ast, 2), locals, fnMap), concat([5], concat(emit(get(ast, 3), locals, fnMap), [11])))))
+  if t == "call"
+    mut out = []
+    let i = 0
+    while i < len(get(ast, 2))
+      out = concat(out, emit(get(get(ast, 2), i), locals, fnMap))
+      i += 1
+    return concat(out, concat([16], uleb(get(fnMap, get(ast, 1)))))
+  return [0, 11]
+
+fn buildModule(funcs)
+  let n = len(funcs)
+  mut fnMap = {}
+  let m = 0
+  while m < n
+    put(fnMap, get(get(funcs, m), 0), m)
+    m += 1
+  mut wasm = []
+  push(wasm, 0)
+  push(wasm, 97)
+  push(wasm, 115)
+  push(wasm, 109)
+  push(wasm, 1)
+  push(wasm, 0)
+  push(wasm, 0)
+  push(wasm, 0)
+  mut typeContent = uleb(n)
+  let i = 0
+  while i < n
+    let f = get(funcs, i)
+    typeContent = concat(typeContent, [96])
+    typeContent = concat(typeContent, uleb(len(get(f, 1))))
+    let k = 0
+    while k < len(get(f, 1))
+      typeContent = concat(typeContent, [127])
+      k += 1
+    typeContent = concat(typeContent, [1, 127])
+    i += 1
+  wasm = concat(wasm, [1])
+  wasm = concat(wasm, uleb(len(typeContent)))
+  wasm = concat(wasm, typeContent)
+  mut fnContent = uleb(n)
+  let j = 0
+  while j < n
+    fnContent = concat(fnContent, uleb(j))
+    j += 1
+  wasm = concat(wasm, [3])
+  wasm = concat(wasm, uleb(len(fnContent)))
+  wasm = concat(wasm, fnContent)
+  mut expContent = uleb(n)
+  let e = 0
+  while e < n
+    expContent = concat(expContent, nameBytes(get(get(funcs, e), 0)))
+    expContent = concat(expContent, [0])
+    expContent = concat(expContent, uleb(e))
+    e += 1
+  wasm = concat(wasm, [7])
+  wasm = concat(wasm, uleb(len(expContent)))
+  wasm = concat(wasm, expContent)
+  mut codeContent = uleb(n)
+  let c = 0
+  while c < n
+    let f = get(funcs, c)
+    mut locals = {}
+    let li = 0
+    while li < len(get(f, 1))
+      put(locals, get(get(f, 1), li), li)
+      li += 1
+    let body = emit(get(f, 2), locals, fnMap)
+    body = concat(body, [11])
+    let entry = concat([0], body)
+    codeContent = concat(codeContent, uleb(len(entry)))
+    codeContent = concat(codeContent, entry)
+    c += 1
+  wasm = concat(wasm, [10])
+  wasm = concat(wasm, uleb(len(codeContent)))
+  wasm = concat(wasm, codeContent)
+  return wasm
+
+fn b64encode(bytes)
+  let T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  mut out = ""
+  let i = 0
+  let n = len(bytes)
+  while i + 2 < n
+    let b1 = get(bytes, i)
+    let b2 = get(bytes, i + 1)
+    let b3 = get(bytes, i + 2)
+    out += substr(T, int(b1 / 4), 1)
+    out += substr(T, (b1 % 4) * 16 + int(b2 / 16), 1)
+    out += substr(T, (b2 % 16) * 4 + int(b3 / 64), 1)
+    out += substr(T, b3 % 64, 1)
+    i += 3
+  if i + 1 == n
+    let b1 = get(bytes, i)
+    out += substr(T, int(b1 / 4), 1)
+    out += substr(T, (b1 % 4) * 16, 1)
+    out += "=="
+  else if i + 2 == n
+    let b1 = get(bytes, i)
+    let b2 = get(bytes, i + 1)
+    out += substr(T, int(b1 / 4), 1)
+    out += substr(T, (b1 % 4) * 16 + int(b2 / 16), 1)
+    out += substr(T, (b2 % 16) * 4, 1)
+    out += "="
+  return out
+
+fn wasmCompile(src)
+  let funcs = metaParseSource(src)
+  let wasm = buildModule(funcs)
+  return [funcs, wasm, b64encode(wasm)]
+
+# ── §5 ENGINES — bridge to host engines (the Conductor) ─────────────────────
+fn engineList()
+  return engines()
+
+fn engineRun(name, code)
+  return engine(name, code)
+
+# ── §6 MODULES — package manager on HyperFS + importUrl registry ───────────
+fn publishModule(name, src)
+  let hash = kae.write("lib:" + name, src)
+  print "published lib:" + str(name) + " -> " + str(hash)
+  return hash
+
+fn importModule(name)
+  let s = str(kae.read("lib:" + name))
+  if len(s) == 0 || s == "null"
+    print "import failed: lib:" + str(name) + " not found"
+    return 0
+  let funcs = metaParseSource(s)
+  print "imported lib:" + str(name) + " -> " + str(len(funcs)) + " functions"
+  return len(funcs)
+
+fn moduleList()
+  let keys = kae.list()
+  mut out = []
+  let i = 0
+  while i < len(keys)
+    let k = str(get(get(keys, i), "key"))
+    if startsWith(k, "lib:")
+      push(out, k)
+    i += 1
+  return out
+
+fn publishUrl(name, url)
+  let hash = kae.write("url:" + name, url)
+  print "registered url:" + str(name) + " -> " + str(url)
+  return hash
+
+fn urlList()
+  let keys = kae.list()
+  mut out = []
+  let i = 0
+  while i < len(keys)
+    let k = str(get(get(keys, i), "key"))
+    if startsWith(k, "url:")
+      push(out, k)
+    i += 1
+  return out
+
+# ── §7 DOCGEN — /// comments -> text + HTML documentation ───────────────────
+fn docExtract(src)
+  mut lines = []
+  let all = split(src, "\n")
+  let i = 0
+  while i < len(all)
+    let line = trim(get(all, i))
+    if startsWith(line, "///")
+      push(lines, trim(substr(line, 3, len(line) - 3)))
+    i += 1
+  return join(lines, "\n")
+
+fn docHtml(src, title)
+  let text = docExtract(src)
+  let body = split(text, "\n")
+  mut html = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n"
+  html += "<title>" + title + "</title>\n"
+  html += "<style>body{font-family:monospace;max-width:720px;margin:40px auto;padding:0 16px;background:#0d0f16;color:#c9d1e8}h1{color:#7c6cf0}code{background:#1a1d2e;padding:2px 6px;border-radius:4px}</style>\n"
+  html += "</head>\n<body>\n<h1>" + title + "</h1>\n"
+  let i = 0
+  while i < len(body)
+    let line = get(body, i)
+    if startsWith(line, "#")
+      html += "<h2>" + substr(line, 1, len(line) - 1) + "</h2>\n"
+    else
+      html += "<p>" + line + "</p>\n"
+    i += 1
+  html += "</body>\n</html>"
+  return html
+
+# ── §8 EXAMPLES — documented, runnable ──────────────────────────────────────
+print "── §8 Examples ──"
+print "meta-interpreter (Aether interpreting Aether):"
+print "  fact(10) via metaRun = " + str(metaRun("fn fact(n) -> n <= 1 ? 1 : n * fact(n - 1)", "fact(10)"))
+print "  fib(10) via metaRun = " + str(metaRun("fn fib(n) -> n < 2 ? n : fib(n - 1) + fib(n - 2)", "fib(10)"))
+print "  ((2 + 3) * 4) via metaRun = " + str(metaRun("", "(2 + 3) * 4"))
+print "stdlib: gcd(48,36)=" + str(libGcd(48, 36)) + " lcm(4,6)=" + str(libLcm(4, 6)) + " isPrime(17)=" + str(libIsPrime(17))
+print "  fibIter(20)=" + str(libFib(20)) + " unique=" + str(libUnique([1, 2, 2, 3, 1]))
+print "engines: " + str(len(engineList())) + " registered -> " + join(engineList(), ", ")
+print "docgen: " + str(len(docExtract("# doc\n/// hello aether")) + 5) + " chars extracted"
+
+# ── §9 SELF-TEST SUITE ──────────────────────────────────────────────────────
+print "── §9 Self-Test Suite ──"
+mut passed = 0
+mut failed = 0
+
+fn check(name, got, want)
+  if got == want
+    passed += 1
+    print "✓ " + str(name)
+  else
+    failed += 1
+    print "✗ " + str(name) + " got=" + str(got) + " want=" + str(want)
+
+# meta-core: arithmetic + precedence
+check("meta 2+3*4", metaRun("", "2 + 3 * 4"), 14)
+check("meta (2+3)*4", metaRun("", "(2 + 3) * 4"), 20)
+check("meta 7%3", metaRun("", "7 % 3"), 1)
+check("meta 12/4", metaRun("", "12 / 4"), 3)
+check("meta neg", metaRun("", "-5 + 10"), 5)
+check("meta cmp", metaRun("", "3 < 5"), 1)
+check("meta ge", metaRun("", "5 >= 5"), 1)
+check("meta eq", metaRun("", "4 == 4"), 1)
+check("meta ne", metaRun("", "4 != 5"), 1)
+check("meta tern", metaRun("", "4 % 2 == 0 ? 1 : 0"), 1)
+check("meta tern2", metaRun("", "3 > 4 ? 1 : 0"), 0)
+
+# meta-core: recursion + calls
+check("meta fact(5)", metaRun("fn fact(n) -> n <= 1 ? 1 : n * fact(n - 1)", "fact(5)"), 120)
+check("meta fact(10)", metaRun("fn fact(n) -> n <= 1 ? 1 : n * fact(n - 1)", "fact(10)"), 3628800)
+check("meta fib(10)", metaRun("fn fib(n) -> n < 2 ? n : fib(n - 1) + fib(n - 2)", "fib(10)"), 55)
+check("meta add", metaRun("fn add(a, b) -> a + b", "add(20, 22)"), 42)
+check("meta 2 args", metaRun("fn sub(a, b) -> a - b", "sub(100, 58)"), 42)
+check("meta builtin len", metaRun("fn f(x) -> len(x)", "f([1, 2, 3])"), 3)
+
+# stdlib: number theory
+check("gcd(48,36)", libGcd(48, 36), 12)
+check("gcd(17,5)", libGcd(17, 5), 1)
+check("lcm(4,6)", libLcm(4, 6), 12)
+check("isPrime(17)", libIsPrime(17), 1)
+check("isPrime(15)", libIsPrime(15), 0)
+check("isPrime(2)", libIsPrime(2), 1)
+check("factIter(5)", libFact(5), 120)
+check("fibIter(10)", libFib(10), 55)
+check("fibIter(20)", libFib(20), 6765)
+
+# stdlib: strings
+check("padLeft", libPadLeft("7", 3, "0"), "007")
+check("padRight", libPadRight("7", 3, "!"), "7!!")
+check("repeatStr", libRepeatStr("ab", 3), "ababab")
+check("countOcc", libCountOcc("banana", "na"), 2)
+check("reverseStr", libReverseStr("aether"), "rehtea")
+check("capitalize", libCapitalize("aether"), "Aether")
+
+# stdlib: lists + dicts
+check("unique", len(libUnique([1, 2, 2, 3, 1])), 3)
+check("flatten", len(libFlatten([[1, 2], [3], 4])), 4)
+check("chunk", len(libChunk([1, 2, 3, 4, 5], 2)), 3)
+check("zip", len(libZip([1, 2, 3], [4, 5, 6])), 3)
+check("concat", len(libConcat([1, 2], [3])), 3)
+check("libSum", libSum([1, 2, 3, 4, 5]), 15)
+check("merge", get(libMerge(put({}, "a", 1), put({}, "b", 2)), "b"), 2)
+
+# wasm: self-hosting compiler
+let kern = wasmCompile("fn fact(n) -> n <= 1 ? 1 : n * fact(n - 1)\nfn fib(n) -> n < 2 ? n : fib(n - 1) + fib(n - 2)\nfn add(a, b) -> a + b\nfn mul(a, b) -> a * b")
+let wasmBytes = get(kern, 1)
+let wasmB64 = get(kern, 2)
+check("wasm magic", get(wasmBytes, 1) * 1000000 + get(wasmBytes, 2) * 1000 + get(wasmBytes, 3), 97115109)
+check("wasm size", len(wasmBytes), 140)
+check("wasm b64 len", len(wasmB64) > 100 ? 1 : 0, 1)
+check("wasm b64 head", substr(wasmB64, 0, 4), "AGFz")
+
+# engines bridge
+check("engineList count", len(engineList()), 7)
+check("engineRun math", get(engineRun("math.exact", "21"), "value"), 42)
+check("engineRun logic", get(engineRun("logic.exact", "x && y"), "satisfiable"), true)
+
+# modules: publish + import round trip
+let modSrc = "fn double(x) -> x * 2\nfn triple(x) -> x * 3"
+publishModule("demo", modSrc)
+check("importModule demo", importModule("demo"), 2)
+check("moduleList has demo", indexOf(moduleList(), "lib:demo") >= 0 ? 1 : 0, 1)
+
+# importUrl registry
+publishUrl("samples", "https://angehlang.local/samples.ae")
+check("urlList has samples", indexOf(urlList(), "url:samples") >= 0 ? 1 : 0, 1)
+
+# docgen
+check("docExtract", docExtract("# heading\n/// hello\n/// world"), "hello\nworld")
+check("docHtml has h1", indexOf(docHtml("/// Aether docs", "Aether Docs"), "<h1>Aether Docs</h1>") >= 0 ? 1 : 0, 1)
+check("docHtml closes", indexOf(docHtml("/// x", "T"), "</html>") >= 0 ? 1 : 0, 1)
+
+# hyperfs round trip
+kae.write("lib:test", "roundtrip")
+check("hyperfs read", str(kae.read("lib:test")), "roundtrip")
+
+# ── §10 FINAL REPORT ─────────────────────────────────────────────────────────
+print "══════════════════════════════════════════"
+print "SELF-TEST: " + str(passed) + " passed · " + str(failed) + " failed"
+if failed == 0
+  print "AETHER LANGUAGE LIBRARY: ALL SYSTEMS OPERATIONAL"
+else
+  print "AETHER LANGUAGE LIBRARY: " + str(failed) + " checks failed"
+print "══════════════════════════════════════════"
