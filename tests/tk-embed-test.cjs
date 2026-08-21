@@ -1,0 +1,22 @@
+const fs = require('fs');
+const html = fs.readFileSync('/mnt/c/Users/Lenon/Desktop/PHOTONIC ANGEHLANG/angeh aether/Kernel Aether v11 FABRIC.html', 'utf8');
+const start = html.indexOf('class KimiTokenizer {');
+const end = html.indexOf('class KimiK3Core {');
+let cls = html.slice(start, end);
+cls = cls.replace('class KimiTokenizer {', 'KimiTokenizer = class KimiTokenizer {');
+globalThis.KimiTokenizer = undefined;
+eval(cls);
+const model = fs.readFileSync(__dirname + '/../models/kimi-k3/tiktoken.model');
+const tok = new KimiTokenizer();
+const n = tok.load(model);
+console.log('loaded tokens:', n);
+const sample = 'Hello, Kernel Æther! The K3 model runs here. 你好世界';
+const ids = tok.encode(sample);
+const REF = [19180, 11, 53427, 3648, 228, 1007, 0, 646, 1040, 18, 3125, 11082, 2397, 13, 220, 33845, 2243];
+console.log('encode MATCH:', JSON.stringify(ids) === JSON.stringify(REF));
+console.log('decode roundtrip:', tok.decode(ids) === sample);
+console.log('tokenCount:', tok.tokenCount('The K3 model runs here.'));
+console.log('stats:', JSON.stringify(tok.stats()));
+// BPE edge: long common words
+const more = ['the', 'Kernel', 'Aether', 'kernel', 'model', 'tokenizer', 'constitution', 'unbelievable'];
+for (const w of more) console.log(w, '→', tok.encode(w).join(','));
