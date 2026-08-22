@@ -1,0 +1,13 @@
+{
+  "name": "kernel-aather-engine",
+  "version": "0.1.0",
+  "description": "Engine scaffolds for Kernel-Aather (bridge, vhw, transformer, connector)",
+  "main": "server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "connector": "node connector.mjs",
+    "server": "node server.mjs"
+  },
+  "engines": { "node": ">=18" }
+}
